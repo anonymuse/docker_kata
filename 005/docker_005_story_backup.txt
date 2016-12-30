@@ -1,0 +1,177 @@
+Let’s build something that we can use. Situational Awareness is one of the most powerful tropes of the DevOps movement, and central to that idea is the ability to monitor systems and aggregate alert, log, and application status data in a centralized repository.
+
+We’ll start out simple today, and use the skills we’ve honed thus far in Docker Katas 001, 002, 003, and 004 and build ourselves one of the simplest but most useful stacks around: a Container Monitoring Stack. This stack will be comprised of several elements:
+
+Docker + Swarm
+cAdvisor
+Elasticsearch
+Kibana
+
+Whether you’re looking to start utilizing Docker and the container ecosystem for an internal team, an external customer, or for an internal project — it’s important to keep making new things, because those things are parts. The accumulation of those parts will increase your abilities, and you’ll in turn understand how to create the machines that power your ability to reach your goals.
+
+In today’s exercise, we’ll create a neat little packaged environment that you can begin using keep track of all the awesome stuff that you’re creating with Docker and Containers. The focus of this post will be on creating the Minimum Viable Product (MVP), though the material underlying how, when, who, and why to monitor could fill a book or thirty. I’d recommend checking out The Philosophy of Monitoring (via https://twitter.com/robewaschuk) or a great book (via James Turnbull) after you finish with this post.
+
+So, let’s get started.
+
+When it comes to application and systems design, I’ve found that teams work best via the DevOps mindset when they break their systems into two parts: Infrastructure as Code and Configuration Management.
+Infrastructure as Code (IaC): This refers to the virtual networking, server, and supporting Identity and Access Management and Security Groups/Firewall rules that define the logical partitioning of your virtual or physical infrastructure footprint. This can be a physical datacenter, Google Cloud Engine, Microsoft Azure, a local Docker Swarm cluster, or any combination of virtual, hardware-based, remote, and or local systems.
+Configuration Management (CM): this term is getting a bit long in the tooth for our use case. Originally meant to encompass the installation and configuration of applications that run on Infrastructure as Code, CM is management of the software installation, configuration, and execution through development, staging and production environments.
+
+For our eagle-eyed readers out there, you’ll note something important here. It’s all software. As it stands, it’s a bit arbitrary in my opinion to break things into IaC/CM, but it’s helpful to keep these paradigms in mind as you begin to break up traditional IT operations and applications into 12-factor application friendly and being embracing Cloud First paradigms.
+
+First off, let’s set up a test cluster so we can get up and running. We’ll dip into our goodie bag of Docker, Swarm, Bash scripts, and command line magic to build our infrastructure. In order to Follow Along At Home™, you’ll need a couple of building blocks:
+
+A node or three running the Docker Daemon @ version 1.12 or greater.
+Docker Machine in order to spin up the cluster
+A soundtrack to listen to while you kick ass in this kata
+
+Buy it here: https://kaitlynaureliasmith.bandcamp.com/album/frkwys-vol-13-sunergy
+For mine, I’ve chosen the beautiful, glitchy, and sun-shiney FRKWYS Vol. 13; Sunergy.
+Check it out, it’s rad.
+One thing to keep in mind while we get our music loaded up — this is not a production ready cluster. We’ll have a lot of fun in the future with building this out into something robust, but we’re not there yet!
+Infrastructure as Code
+Building the Cluster
+Once you’ve verified that you have the correct version of Docker Engine:
+$ docker — version
+Docker version 1.12.1, build 6f9534c, experimental
+and at least 0.8.1 of Docker Machine:
+$ docker-machine — version
+docker-machine version 0.8.1, build 41b3b25
+We can get started! Here’s the script that we’ll use to create the cluster. We’ll break it down into parts so you understand what’s going on here. When you copy it to your machine, make sure to make the script executable.
+$ chmod +x create_cluster.sh
+This script will create 4 worker nodes (which may be a bit of overkill, but it’s fun!) and a single master node.
+
+Let’s spin up the cluster, and break the script down into parts while we wait. you should see this upon execution of the script``
+$ ./create_cluster.sh
+Using default node01 node02 node03 node04. Set $WORKERS environment variable to alter.
+Creating master node
+Running pre-create checks...
+Creating machine...
+(manager) Copying /Users/jesse/.docker/machine/cache/boot2docker.iso to /Users/jesse/.docker/machine/machines/manager/boot2docker.iso...
+(manager) Creating VirtualBox VM...
+(manager) Creating SSH key...
+(manager) Starting the VM...
+(manager) Check network to re-create if needed...
+(manager) Waiting for an IP...
+Waiting for machine to be running, this may take a few minutes...
+Detecting operating system of created instance...
+Waiting for SSH to be available...
+Detecting the provisioner...
+Provisioning with boot2docker...
+Copying certs to the local machine directory...
+Copying certs to the remote machine...
+Setting Docker configuration on the remote daemon...
+Checking connection to Docker...
+Docker is up and running!
+To see how to connect your Docker Client to the Docker Engine running on this virtual machine, run: docker-machine env manager
+Initializing the swarm mode
+Swarm initialized: current node (6fsqtkxbrs7h997artvvp26nf) is now a manager.
+...snip...
+There’s more, but you get the idea. Our script first creates a few functions to simplify some of the command line shortcuts.
+create_machine() {
+ docker-machine create \
+   -d virtualbox \
+   $1
+This allows us to clean up the Virtual Machine (VM) provisioning a bit. The second function is just a shortcut so we don’t have to call out the full configuration string that the Docker Engine make available to us. That would normally similar to this:
+$ docker $(docker-machine config <servername>) <docker_command>
+We’ll use one of our global variables, $master_conf, to make our script look a little neater.
+swarm_master() {
+ docker $master_conf $@
+Once we get to the main() part of the script, it’s some more variables,
+master_ip=$(docker-machine ip ${master})
+master_conf=$(docker-machine config ${master})
+And then a collection of Docker Swarm creation and initiation commands. If you peek around the internals a bit, you’ll see that we use variables and functions to simplify the script writing. This may not seem important in a simple How-To exercise, but as you build simple applications into more complex systems, and those systems into digestible and sharable abstractions (think, APIs), it’s helpful to being create reusable software and avoid repeating yourself (DRY) at this level. Trust me!
+# Derive useful variables for Swarm setup
+ master_ip=$(docker-machine ip ${master})
+ master_conf=$(docker-machine config ${master})
+# Initialize the swarm mode
+ echo “Initializing the swarm mode”
+ swarm_master swarm init — advertise-addr $master_ip
+# Obtain the worker token
+ worker_token=$(docker ${master_conf} swarm join-token -q worker)
+ echo “Worker token: ${worker_token}”
+# Create and join the workers
+for worker in $workers; do
+  echo “Creating worker ${worker}”
+  create_machine $worker &
+done
+wait
+for worker in $workers; do
+  worker_conf=$(docker-machine config ${worker})
+  echo “Node $worker information:”
+  docker $worker_conf swarm join — token $worker_token $master_ip:$swarm_port
+done
+There’s nothing too exotic here, but it keeps our Infrastructure as Code nice and neat. You should see a bunch of machines running now.
+=====================
+Docker Machine cluster status
+NAME ACTIVE DRIVER STATE URL SWARM DOCKER ERRORS
+master01 — virtualbox Running tcp://192.168.99.112:2376 v1.12.1
+node01 — virtualbox Running tcp://192.168.99.113:2376 v1.12.1
+node02 — virtualbox Running tcp://192.168.99.114:2376 v1.12.1
+node03 — virtualbox Running tcp://192.168.99.115:2376 v1.12.1
+node04 — virtualbox Running tcp://192.168.99.116:2376 v1.12.1
+=====================
+Docker Swarm node status
+ID HOSTNAME STATUS AVAILABILITY MANAGER STATUS
+0h6qfxudj2nrmm8vwklsq89d6 node03 Ready Active
+3rfyt9id223ymq801b3puaso1 node04 Ready Active
+50wzpw8dzvcheu59u954rwcfa * master01 Ready Active Leader
+6c711c3d9j87pdypx7kd0man0 node02 Ready Active
+74pjh8z413nh6qabs9r6kf23z node01 Ready Active
+
+Feel free to poke around to make sure everything is up and running.
+$ docker-machine ssh master01
+                        ##         .
+                  ## ## ##        ==
+               ## ## ## ## ##    ===
+           /"""""""""""""""""\___/ ===
+      ~~~ {~~ ~~~~ ~~~ ~~~~ ~~~ ~ /  ===- ~~~
+           \______ o           __/
+             \    \         __/
+              \____\_______/
+ _                 _   ____     _            _
+| |__   ___   ___ | |_|___ \ __| | ___   ___| | _____ _ __
+| '_ \ / _ \ / _ \| __| __) / _` |/ _ \ / __| |/ / _ \ '__|
+| |_) | (_) | (_) | |_ / __/ (_| | (_) | (__|   <  __/ |
+|_.__/ \___/ \___/ \__|_____\__,_|\___/ \___|_|\_\___|_|
+Boot2Docker version 1.12.1, build HEAD : ef7d0b4 - Thu Aug 18 21:18:06 UTC 2016
+Docker version 1.12.1, build 23cf638
+docker@master01:~$ docker node ls
+ID                           HOSTNAME  STATUS  AVAILABILITY  MANAGER STATUS
+0h6qfxudj2nrmm8vwklsq89d6    node03    Ready   Active
+3rfyt9id223ymq801b3puaso1    node04    Ready   Active
+50wzpw8dzvcheu59u954rwcfa *  master01  Ready   Active        Leader
+6c711c3d9j87pdypx7kd0man0    node02    Ready   Active
+74pjh8z413nh6qabs9r6kf23z    node01    Ready   Active
+docker@master01:~$ docker swarm join-token worker
+To add a worker to this swarm, run the following command:
+docker swarm join \
+    --token SWMTKN-1-0uizvnx3ts0eadrg60krcmcupwyex23c2tlhgvbgxzyb5ibp1n-3n6tb2jnyqv9pxd9j01kxnzt1 \
+    192.168.99.112:2377
+$
+All of the commands that we’ll run with our next script are available to you within the master01 machine. In fact, I heartily recommend reading along here and manually typing in the different variables and commands into your terminal. It’s great for building muscle memory, and gets your familiar with the workflow of the Docker Ecosystem.
+Important Note!
+In our script we create configurations that allow us to execute remote commands on the master01 host. If you’re manually entering these commands, be sure to do so from the master01 host, either through logging into the machine directly:
+$ docker-machine ssh master01
+0434dkva3 #
+Or though using the Docker engine’s remote configuration capability
+$ docker $(docker-machine config master01) <command>
+Configuration Management
+Let’s go ahead with building our application. Remember, if you’re entering in these commands, you’ll need to do so on the Swarm Manager node (in our case, master01.
+In order to run our Monitoring System successfully with Docker Swarm, we’ll need to create a network with Docker’s new networking functionality. The creation of the network probably belongs in the IaC section of the tutorial, but for simplicity’s sake I’ve airlifted that over here to the application setup inside of our Configuration Management.
+Here’s the script that we’ll use.
+
+If you take a peek at the visualizer, you should see your containers start to spin up.
+
+https://github.com/ManoMarks/docker-swarm-visualizer
+Once these pieces have assembled, we can go take a look at Kibana to see what we’ve wrought.
+Using a similar command to what was used to open the visualizer, we can open up the Kibana dashboard page.
+$ open http://`docker-machine ip master01`:5601
+Voila!
+Once you’re in here, there’s a lot to play with, and I recommend reading over both the Elasticsearch and Kibana documentation to get a sense of what you want to start monitoring. Getting started with CPU, memory network, disk IO, disk space, network throughput, and load is just the tip of the iceberg.
+As you can see in the screenshot below, you can see that everything is being aggregated under cAdvisor’s container_stats.timetamp. If you look through the Discovery and Visualize sections of Kibana, you’ll start to get a sense of how the system can display the available data that we’re feeding it.
+
+Over time, you’ll develop a sense of what metrics are required to keep a production system running. It’s a lot of fun to put that puzzle together. At previous companies, my teams have created metrics that numbered in the ten-thousands, and we were always tweaking and refining our systems to squeeze every bit of performance, security, and flexibility from our systems.
+I hope you’ve enjoyed this newest Docker Kata. Feel free to leave comments below, or in the gists attached to the article.
+
+Thanks for reading, and as ever — click the heart below if this helped!
